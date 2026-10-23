@@ -1568,7 +1568,6 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
     }
 
     private func applySystemCursorForCurrentMode() {
-        window?.invalidateCursorRects(for: self)
         guard interactionMode == .draw,
               let window,
               window.isKeyWindow else {
