@@ -21,8 +21,8 @@ MultitouchSupport framework for per-finger contact size.
 
 ## Features
 
-- **Zen mode** — the system cursor freezes and hides while you draw; your
-  fingers own the canvas. `Esc` toggles back to normal pointing, and the app
+- **Draw mode** — the system cursor freezes and hides during strokes; a light
+  touch moves the pointer to the controls. The visible Draw / Pointer selector switches to normal pointing (`Esc` also works), and the app
   guarantees your cursor is restored on focus loss, view teardown, and quit.
 - **Absolute finger drawing** — the on-screen corner brackets mirror the
   physical pad; anything capacitive can draw.
@@ -64,18 +64,38 @@ cd trackpad-studio
 
 ## Controls
 
-| Input | Action |
-|---|---|
-| 1 finger | cursor; draws while clicked (or on firm touch when per-finger data is available) |
-| 2 fingers | pan + zoom simultaneously |
-| 3 fingers | force-draw with the current tool (leftmost finger is the pen) |
-| `1`–`5` | select tool |
-| `T` | one-shot text at the cursor |
-| `[` / `]` | touch level — lower/raise the contact size where a touch starts drawing (persisted; trackpads vary) |
-| `⌘G` | AI redraw — snapshots the board to /tmp, `codex` + imagegen repaint it, result replaces the board (spinner top-right; one `⌘Z` rolls it back) |
-| `⌘Z` / `⌘⌫` | undo / clear |
-| `Esc` | toggle Zen ⇄ Pointer mode |
-| `⌘T` / `?` | open the trackpad tutorial |
+The sidebar has labeled buttons for **Pen, Eraser, Line, Rectangle, Ellipse,
+Arrow, Text, Undo, and Clear canvas**, plus a **Draw / Pointer** selector.
+No shortcuts are required.
+
+- **Draw:** press and slide a finger to draw at its absolute trackpad position.
+  A light touch moves the normal pointer so you can reach the sidebar; the
+  pointer freezes only while drawing or using a two/three-finger gesture.
+- **Pointer:** use the normal cursor without drawing. Click **Draw** or choose
+  any drawing tool to resume drawing.
+- **Eraser:** press and sweep to remove whole strokes or objects. The orange
+  ring shows its reach. Each erase gesture is one undo step.
+- **Undo:** restores the last drawing, erase, or clear operation.
+- **Clear canvas:** clears everything; Undo brings it back.
+- **Text:** places an editable text field at the last drawing position. Return
+  commits the text; Escape cancels editing.
+- Two fingers pan and zoom in Draw; three fingers draw/erase without a click.
+- A conventional mouse can also draw or erase by dragging in Draw mode.
+
+Optional shortcuts: **Esc** toggles Draw/Pointer, **1–5** select the original
+five tools, **E** selects Eraser, **T** places text, **⌘Z** undoes, **⌘Delete**
+clears. **[ / ]** adjust the firm-touch threshold. Existing **⌘G** AI redraw
+is unchanged and is not needed for drawing.
+
+### Regression checks
+
+```bash
+swiftc Sources/TrackpadStudio/BoardModel.swift Tests/BoardModelChecks.swift -o /tmp/board-model-checks
+/tmp/board-model-checks
+```
+
+These check fast eraser sweeps, shape outlines, arrowheads, cancellation,
+undoable clearing and erasing, replacement history, and zoom/pan coordinates.
 
 ## Weight scale & per-finger detail
 
