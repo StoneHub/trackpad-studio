@@ -78,6 +78,12 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
     private var penFingerID: Int?
 
     private var interactionMode: InteractionMode = .draw
+    /// Start times of the two short overlay flashes (mode switch, end of a
+    /// two-finger pan); nil when not flashing. Read by the 60 Hz poll so the
+    /// fade keeps repainting without a timer of its own.
+    private var modeFlashStartedAt: TimeInterval?
+    private var recenterFlashStartedAt: TimeInterval?
+    private let overlayFlashDuration: TimeInterval = 0.7
     private var cursorFrozen = false
     private var cursorTrackingArea: NSTrackingArea?
     private lazy var transparentCursor = Self.makeTransparentCursor()
@@ -269,8 +275,10 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
         model.elements.forEach { draw(element: $0) }
         drawActiveDraft()
         drawEmptyStateHint()
-        drawTrackpadOverlay()
+        drawPadFrame()
         drawTouchMarkers()
+        drawFingerTether()
+        drawModeHalo()
         drawSidebarCard()
         drawCursor()
         drawStatusStrip()
@@ -990,6 +998,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
 
     private func pollMultitouch() {
         defer { updatePointerCapture() }
+        if isOverlayFlashing { needsDisplay = true }
         guard interactionMode == .draw,
               currentTouches.count == 1 else {
             matchedFinger = nil
@@ -1274,6 +1283,11 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
     }
 
     private func endTwoFingerNavigation() {
+        // Flash home only when a real pan/zoom just ended; this is also called
+        // on every non-two-finger frame as a no-op reset.
+        if isTwoFingerNavigating {
+            recenterFlashStartedAt = ProcessInfo.processInfo.systemUptime
+        }
         twoFingerBaseline = nil
         isTwoFingerNavigating = false
     }
@@ -1509,6 +1523,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
     }
 
     private func enterDrawMode(parkPointer: Bool = false) {
+        if interactionMode != .draw { startModeFlash() }
         interactionMode = .draw
         drawingSuppressedUntilRelease = !currentTouches.isEmpty
         if parkPointer { parkPointerOnBoard() }
@@ -1520,6 +1535,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
     }
 
     private func enterPointerMode() {
+        if interactionMode != .pointer { startModeFlash() }
         interactionMode = .pointer
         cancelActiveDraft()
         cancelTextEditing()
@@ -2099,28 +2115,171 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
 
     /// Four corner brackets — a whisper of where the pad maps to, with no frame
     /// around the artwork.
-    private func drawTrackpadOverlay() {
+    // MARK: - Orientation overlays
+
+    private var padCenter: CGPoint {
+        CGPoint(x: trackpadRect.midX, y: trackpadRect.midY)
+    }
+
+    private var isInking: Bool {
+        isDrawingRequested || isThreeFingerDrawing
+    }
+
+    private func startModeFlash() {
+        modeFlashStartedAt = ProcessInfo.processInfo.systemUptime
+    }
+
+    /// 1 at the start of a flash fading to 0; nil once it is over or if none
+    /// was started.
+    private func flashProgress(since start: TimeInterval?) -> CGFloat? {
+        guard let start else { return nil }
+        let elapsed = ProcessInfo.processInfo.systemUptime - start
+        guard elapsed >= 0, elapsed < overlayFlashDuration else { return nil }
+        return CGFloat(1 - elapsed / overlayFlashDuration)
+    }
+
+    private var isOverlayFlashing: Bool {
+        flashProgress(since: modeFlashStartedAt) != nil ||
+            flashProgress(since: recenterFlashStartedAt) != nil
+    }
+
+    /// Mode halo: a ring around the board in the mode's color, matching the
+    /// status badge. Bright for a moment after a switch, then settles. It is
+    /// the one board-level cue left in pointer mode, where the touch rings and
+    /// finger cursor are gone.
+    private func drawModeHalo() {
+        let rect = contentRect.insetBy(dx: 1.5, dy: 1.5)
+        guard rect.width > 20, rect.height > 20 else { return }
+        let accent = interactionMode == .draw ? inkColor : NSColor.systemOrange
+        let flash = flashProgress(since: modeFlashStartedAt) ?? 0
+
+        let wash = NSBezierPath(roundedRect: rect.insetBy(dx: 3, dy: 3), xRadius: 8, yRadius: 8)
+        wash.lineWidth = 6 + 6 * flash
+        accent.withAlphaComponent(0.07 + 0.14 * flash).setStroke()
+        wash.stroke()
+
+        let ring = NSBezierPath(roundedRect: rect, xRadius: 10, yRadius: 10)
+        ring.lineWidth = 3 + 2 * flash
+        accent.withAlphaComponent(0.45 + 0.5 * flash).setStroke()
+        ring.stroke()
+    }
+
+    /// Pad outline, midpoint ticks and a center mark. The pad rect never moves
+    /// with pan or zoom, so its center is always where a finger at the center
+    /// of the trackpad lands: "home". The ticks point outward, ruler style, so
+    /// they stay out of the ink.
+    private func drawPadFrame() {
+        guard interactionMode == .draw else { return }
         let rect = trackpadRect
-        let arm = min(22, min(rect.width, rect.height) * 0.09)
-        guard arm > 2 else { return }
+        guard rect.width > 40, rect.height > 40 else { return }
 
-        let path = NSBezierPath()
-        for (corner, dx, dy) in [
-            (CGPoint(x: rect.minX, y: rect.minY), 1.0, 1.0),
-            (CGPoint(x: rect.maxX, y: rect.minY), -1.0, 1.0),
-            (CGPoint(x: rect.minX, y: rect.maxY), 1.0, -1.0),
-            (CGPoint(x: rect.maxX, y: rect.maxY), -1.0, -1.0),
-        ] {
-            path.move(to: CGPoint(x: corner.x + arm * CGFloat(dx), y: corner.y))
-            path.line(to: corner)
-            path.line(to: CGPoint(x: corner.x, y: corner.y + arm * CGFloat(dy)))
+        let outline = NSBezierPath(roundedRect: rect, xRadius: 10, yRadius: 10)
+        outline.lineWidth = 1
+        outline.setLineDash([3, 5], count: 2, phase: 0)
+        NSColor(calibratedWhite: 0.95, alpha: 0.13).setStroke()
+        outline.stroke()
+
+        drawEdgeProximity(in: rect)
+
+        let tick: CGFloat = 12
+        let ticks = NSBezierPath()
+        ticks.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        ticks.line(to: CGPoint(x: rect.midX, y: rect.minY - tick))
+        ticks.move(to: CGPoint(x: rect.midX, y: rect.maxY))
+        ticks.line(to: CGPoint(x: rect.midX, y: rect.maxY + tick))
+        ticks.move(to: CGPoint(x: rect.minX, y: rect.midY))
+        ticks.line(to: CGPoint(x: rect.minX - tick, y: rect.midY))
+        ticks.move(to: CGPoint(x: rect.maxX, y: rect.midY))
+        ticks.line(to: CGPoint(x: rect.maxX + tick, y: rect.midY))
+        ticks.lineWidth = 1.5
+        ticks.lineCapStyle = .round
+        NSColor(calibratedWhite: 1, alpha: 0.4).setStroke()
+        ticks.stroke()
+
+        drawCenterMark()
+    }
+
+    /// The edge the finger is approaching brightens, so the boundary is felt
+    /// before it is hit. Works off the normalized pad position of the single
+    /// active finger; corners light two edges.
+    private func drawEdgeProximity(in rect: CGRect) {
+        guard currentTouches.count == 1 else { return }
+        let pos = currentTouches[0].pos
+        let reach: CGFloat = 0.18
+        let corner: CGFloat = 10
+        let edges: [(distance: CGFloat, from: CGPoint, to: CGPoint)] = [
+            (pos.x, CGPoint(x: rect.minX, y: rect.minY + corner), CGPoint(x: rect.minX, y: rect.maxY - corner)),
+            (1 - pos.x, CGPoint(x: rect.maxX, y: rect.minY + corner), CGPoint(x: rect.maxX, y: rect.maxY - corner)),
+            (pos.y, CGPoint(x: rect.minX + corner, y: rect.minY), CGPoint(x: rect.maxX - corner, y: rect.minY)),
+            (1 - pos.y, CGPoint(x: rect.minX + corner, y: rect.maxY), CGPoint(x: rect.maxX - corner, y: rect.maxY)),
+        ]
+        for edge in edges where edge.distance < reach {
+            let strength = 1 - max(0, edge.distance) / reach
+            let line = NSBezierPath()
+            line.move(to: edge.from)
+            line.line(to: edge.to)
+            line.lineWidth = 1 + 1.5 * strength
+            line.lineCapStyle = .round
+            inkColor.withAlphaComponent(0.55 * strength).setStroke()
+            line.stroke()
         }
+    }
 
-        NSColor(calibratedWhite: 0.95, alpha: 0.14).setStroke()
-        path.lineWidth = 1
-        path.lineCapStyle = .round
-        path.lineJoinStyle = .round
-        path.stroke()
+    /// Small plus at home. Quiet by default, brighter as the finger nears it,
+    /// hidden while ink is down, and it flares with an expanding ring when a
+    /// two-finger pan ends so the eye lands on the new center.
+    private func drawCenterMark() {
+        let home = padCenter
+        let recenter = flashProgress(since: recenterFlashStartedAt) ?? 0
+        var alpha: CGFloat = isInking ? 0 : 0.24
+        if !isInking, let point = currentCursorViewPoint, currentTouches.count == 1 {
+            let near = 1 - min(1, hypot(point.x - home.x, point.y - home.y) / (trackpadRect.width * 0.12))
+            alpha += 0.5 * near
+        }
+        alpha = max(alpha, 0.9 * recenter)
+        guard alpha > 0.01 else { return }
+
+        let arm: CGFloat = 8 + 10 * recenter
+        let cross = NSBezierPath()
+        cross.move(to: CGPoint(x: home.x - arm, y: home.y))
+        cross.line(to: CGPoint(x: home.x + arm, y: home.y))
+        cross.move(to: CGPoint(x: home.x, y: home.y - arm))
+        cross.line(to: CGPoint(x: home.x, y: home.y + arm))
+        cross.lineWidth = 1
+        NSColor(calibratedWhite: 1, alpha: alpha).setStroke()
+        cross.stroke()
+
+        guard recenter > 0 else { return }
+        let radius = 10 + 44 * (1 - recenter)
+        let pulse = NSBezierPath(
+            ovalIn: CGRect(x: home.x - radius, y: home.y - radius, width: radius * 2, height: radius * 2)
+        )
+        pulse.lineWidth = 1.5
+        inkColor.withAlphaComponent(0.7 * recenter).setStroke()
+        pulse.stroke()
+    }
+
+    /// Dashed line from home to the finger: direction and distance in one
+    /// glance, which is what recovers you after the finger jumps. Stronger the
+    /// farther out the finger is, dimmer while ink is down so it orients
+    /// without competing with the stroke.
+    private func drawFingerTether() {
+        guard interactionMode == .draw,
+              let point = currentCursorViewPoint,
+              currentTouches.count == 1 || isThreeFingerDrawing || isMouseDown else { return }
+        let home = padCenter
+        let distance = hypot(point.x - home.x, point.y - home.y)
+        guard distance > 14 else { return }
+
+        let reach = min(1, distance / (trackpadRect.width / 2))
+        let alpha = (isInking ? 0.14 : 0.34) * (0.35 + 0.65 * reach)
+        let tether = NSBezierPath()
+        tether.move(to: home)
+        tether.line(to: point)
+        tether.lineWidth = 1
+        tether.setLineDash([2, 4], count: 2, phase: 0)
+        inkColor.withAlphaComponent(alpha).setStroke()
+        tether.stroke()
     }
 
     private func drawEmptyStateHint() {
