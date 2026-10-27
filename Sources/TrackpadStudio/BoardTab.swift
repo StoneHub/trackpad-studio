@@ -38,6 +38,12 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
         var spread: CGFloat
     }
 
+    /// Shadow text naming a button's key, laid over the button's trailing
+    /// edge. Clicks fall through to the button underneath.
+    private final class KeyHintLabel: NSTextField {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
     private let model = BoardModel()
     private let captureView = TouchCaptureView()
     private let inkColor = NSColor(
@@ -112,6 +118,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
     private var undoButton: NSButton!
     private var clearButton: NSButton!
     private let toolsLabel = NSTextField(labelWithString: "TOOLS")
+    private let modeHint = NSTextField(labelWithString: "esc toggles")
     private let controlsHint = NSTextField(wrappingLabelWithString: "")
 
     /// Contact size at which a touch stops being a hover cursor and starts
@@ -1708,13 +1715,18 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
         toolsLabel.font = .systemFont(ofSize: 10, weight: .semibold)
         toolsLabel.textColor = .secondaryLabelColor
         sidebar.addSubview(toolsLabel)
+        modeHint.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        modeHint.textColor = .tertiaryLabelColor
+        modeHint.alignment = .right
+        sidebar.addSubview(modeHint)
         let symbols: [BoardTool: String] = [
             .pen: "pencil.tip", .eraser: "eraser", .line: "line.diagonal",
             .rectangle: "rectangle", .ellipse: "circle", .arrow: "arrow.up.right"
         ]
         for tool in BoardTool.allCases {
             let button = makeSidebarButton(tool.name, symbol: symbols[tool],
-                                           action: #selector(toolButtonPressed(_:)))
+                                           action: #selector(toolButtonPressed(_:)),
+                                           key: tool.shortcut.uppercased())
             button.setButtonType(.toggle)
             button.toolTip = tool == .eraser
                 ? "Remove whole strokes and shapes. Undo restores an erase."
@@ -1722,11 +1734,11 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
             toolButtons.append((tool, button))
         }
         textButton = makeSidebarButton("Text", symbol: "textformat",
-                                      action: #selector(textButtonPressed(_:)))
+                                      action: #selector(textButtonPressed(_:)), key: "T")
         undoButton = makeSidebarButton("Undo", symbol: "arrow.uturn.backward",
-                                      action: #selector(undoButtonPressed(_:)))
-        clearButton = makeSidebarButton("Clear canvas", symbol: "trash",
-                                       action: #selector(clearButtonPressed(_:)))
+                                      action: #selector(undoButtonPressed(_:)), key: "⌘Z")
+        clearButton = makeSidebarButton("Clear", symbol: "trash",
+                                       action: #selector(clearButtonPressed(_:)), key: "⌘⌫")
         clearButton.toolTip = "Clear everything. Undo brings it back."
         controlsHint.font = .systemFont(ofSize: 11)
         controlsHint.textColor = .secondaryLabelColor
@@ -1734,16 +1746,31 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
         syncControls()
     }
 
-    private func makeSidebarButton(_ title: String, symbol: String?, action: Selector) -> NSButton {
+    private func makeSidebarButton(
+        _ title: String,
+        symbol: String?,
+        action: Selector,
+        key: String
+    ) -> NSButton {
         let button = NSButton(title: title, target: self, action: action)
         button.bezelStyle = .rounded
         button.font = .systemFont(ofSize: 12, weight: .medium)
+        button.alignment = .left
         button.imagePosition = .imageLeading
         button.imageScaling = .scaleProportionallyDown
         if let symbol { button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
-        button.setAccessibilityLabel(title)
+        button.setAccessibilityLabel("\(title), shortcut \(key)")
         button.refusesFirstResponder = true
         sidebar.addSubview(button)
+
+        let hint = KeyHintLabel(labelWithString: key)
+        hint.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
+        hint.textColor = .tertiaryLabelColor
+        hint.alignment = .right
+        let width: CGFloat = 34
+        hint.frame = CGRect(x: button.bounds.maxX - width - 9, y: 7, width: width, height: 14)
+        hint.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
+        button.addSubview(hint)
         return button
     }
 
@@ -1754,7 +1781,8 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
         var y = height - 42
         modeControl.frame = CGRect(x: 10, y: y, width: sidebarWidth - 20, height: 28)
         y -= 29
-        toolsLabel.frame = CGRect(x: 14, y: y, width: sidebarWidth - 28, height: 16)
+        toolsLabel.frame = CGRect(x: 14, y: y, width: 60, height: 16)
+        modeHint.frame = CGRect(x: sidebarWidth - 14 - 80, y: y, width: 80, height: 16)
         y -= sidebarRowHeight
         for (_, button) in toolButtons {
             button.frame = CGRect(x: 10, y: y, width: sidebarWidth - 20, height: 28)
