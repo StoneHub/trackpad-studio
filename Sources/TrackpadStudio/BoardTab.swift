@@ -1054,16 +1054,36 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
         return min(1, CGFloat((matchedFinger?.size ?? 0) / 1.5))
     }
 
-    private func strokeWidth(forForce force: CGFloat) -> CGFloat {
+    private static let penMinimumWidth: CGFloat = 1.5
+    private static let penMaximumWidth: CGFloat = 40
+    /// > 1 keeps a light press thin and reserves most of the range for a hard
+    /// press, so the top end feels like a jump rather than a gentle slope.
+    private static let penPressureExponent: CGFloat = 1.8
+
+    /// Pen width for a normalized force (0...1). A light touch is a fine line,
+    /// a full Force Touch press is a big brush.
+    private func penWidth(forForce force: CGFloat) -> CGFloat {
+        let clamped = min(1, max(0, force))
+        let curved = pow(clamped, Self.penPressureExponent)
+        return Self.penMinimumWidth
+            + (Self.penMaximumWidth - Self.penMinimumWidth) * curved
+    }
+
+    /// Outline width for line / rectangle / ellipse / arrow: pressure still
+    /// nudges it, but shapes stay crisp instead of turning into blobs.
+    private func shapeWidth(forForce force: CGFloat) -> CGFloat {
         2 + 6 * min(1, max(0, force))
     }
 
     private var forceAdjustedWidth: CGFloat {
-        strokeWidth(forForce: currentForceNorm)
+        currentTool == .pen
+            ? penWidth(forForce: currentForceNorm)
+            : shapeWidth(forForce: currentForceNorm)
     }
 
+    /// Width for the three-finger pen, which has no pressure signal.
     private var fullForceWidth: CGFloat {
-        strokeWidth(forForce: 1)
+        shapeWidth(forForce: 1)
     }
 
     private func updateSingleTouchInteraction() {
@@ -1132,7 +1152,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
                 draft.strokeSamples.append(
                     BoardStrokeSample(
                         point: smoothedPoint,
-                        width: last.width * 0.7 + width * 0.3
+                        width: last.width * 0.55 + width * 0.45
                     )
                 )
             }

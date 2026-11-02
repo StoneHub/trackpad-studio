@@ -131,9 +131,11 @@ Interaction rules:
 - **1 touch**: always show a cursor dot at the mapped point (feature 2 "light
   touch = cursor"). It DRAWS when: physical click held (mouse button down), OR
   `MultitouchReader.shared.isAvailable` and that finger's `size ≥ 0.35`
-  (constant, tune). Stroke width = 2 + 6 × forceNorm where forceNorm = NSEvent
-  pressure (while clicked) else `min(1, size / 1.5)`. Match MT fingers to the
-  touch by nearest normalized distance.
+  (constant, tune). forceNorm = NSEvent pressure (while clicked) else
+  `min(1, size / 1.5)`. Pen width = 1.5 + 38.5 × forceNorm^1.8 (a light touch
+  is a hairline, a full press is a ~40 pt brush); shape outlines stay at
+  2 + 6 × forceNorm. Match MT fingers to the touch by nearest normalized
+  distance.
 - **≥2 touches**: never draw. Pinch (`.magnify`) zooms about view center;
   `.scroll` pans. Ongoing stroke is cancelled (removed), not committed.
 - **Deep force click (stage 2)** or key `s`: quick palette overlay at the cursor
