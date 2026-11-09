@@ -162,6 +162,9 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
         allowedTouchTypes = [.indirect]
         wantsRestingTouches = true
         setUpSidebar()
+        registerForDraggedTypes(
+            NSImage.imageTypes.map { NSPasteboard.PasteboardType($0) } + [.fileURL]
+        )
 
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
@@ -289,6 +292,47 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
         drawSidebarCard()
         drawCursor()
         drawStatusStrip()
+    }
+
+    // MARK: - Opening pictures
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        NSImage.canInit(with: sender.draggingPasteboard) ? .copy : []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let image = NSImage(pasteboard: sender.draggingPasteboard) else { return false }
+        return show(image)
+    }
+
+    func openImage(at url: URL) {
+        guard let image = NSImage(contentsOf: url), show(image) else {
+            flashAIStatus("Can't open \(url.lastPathComponent)")
+            return
+        }
+    }
+
+    /// Replaces the board with the picture, fitted to the pad brackets so a
+    /// finger can reach every part of it. One ⌘Z brings the old board back.
+    private func show(_ image: NSImage) -> Bool {
+        guard image.size.width > 0, image.size.height > 0 else { return false }
+        finishActiveDraft()
+        commitTextEditing()
+
+        let fit = BoardModel.aspectFit(image.size, in: trackpadRect)
+        let origin = model.viewToCanvas(fit.origin, in: bounds)
+        let rect = CGRect(
+            origin: origin,
+            size: CGSize(width: fit.width / model.zoom, height: fit.height / model.zoom)
+        )
+        model.replaceAll(with: .backdrop(rect: rect, image: image))
+        suppressInkWhilePressed()
+        syncControls()
+        needsDisplay = true
+
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        return true
     }
 
     /// Seeds a small demo drawing (used by the --snapshot marketing/screenshot
@@ -1909,7 +1953,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
                 ]
             )
 
-        case let .image(rect, image):
+        case let .image(rect, image), let .backdrop(rect, image):
             image.draw(
                 in: model.canvasToView(rect, in: bounds),
                 from: .zero,

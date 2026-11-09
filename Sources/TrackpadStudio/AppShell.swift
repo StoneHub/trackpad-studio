@@ -4,6 +4,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
     private var tutorialPanel: NSPanel?
     private var boardView: BoardTabView?
+    /// A file handed over at launch can arrive before the board exists.
+    private var pendingImageURL: URL?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
@@ -13,6 +15,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.window = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        if let url = pendingImageURL {
+            pendingImageURL = nil
+            boardView?.openImage(at: url)
+        }
 
         if let idx = CommandLine.arguments.firstIndex(of: "--snapshot"),
            CommandLine.arguments.count > idx + 1 {
@@ -36,6 +43,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
             }
             NSApp.terminate(nil)
+        }
+    }
+
+    /// Finder's Open With, or an image dropped on the Dock icon.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard let url = urls.first else { return }
+        if let boardView {
+            boardView.openImage(at: url)
+        } else {
+            pendingImageURL = url
         }
     }
 

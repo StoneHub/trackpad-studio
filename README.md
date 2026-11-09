@@ -36,6 +36,9 @@ MultitouchSupport framework for per-finger contact size.
 - **Tools 1–5** — pen, line, rectangle, ellipse, arrow in an always-visible left
   toolbar with active highlight. `T` drops one-shot text that keeps a constant
   on-screen size at any zoom, then hands the pen back.
+- **Mark up pictures** — drag an image or screenshot onto the board, or use
+  Finder's Open With, and draw over it. The eraser only takes your ink; `⌘Z`
+  brings the previous board back.
 - **Guided tutorial** (`⌘T` or the `?` button) — 8 trackpad capabilities as
   tutorial cards with live ✓ discovery, plus a weight-estimate card that turns
   the pad into a rough gram scale via capacitive contact size.
