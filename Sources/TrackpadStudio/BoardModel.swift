@@ -56,6 +56,9 @@ enum BoardElement {
     case arrow(start: CGPoint, end: CGPoint, width: CGFloat, color: NSColor)
     case text(origin: CGPoint, string: String, fontSize: CGFloat, color: NSColor)
     case image(rect: CGRect, image: NSImage)
+    /// A picture opened for markup: drawn like an image, but the eraser and
+    /// hit tests pass through it so erasing ink can't delete the picture.
+    case backdrop(rect: CGRect, image: NSImage)
 }
 
 final class BoardModel {
@@ -128,8 +131,8 @@ final class BoardModel {
         hasCreatedContent = true
     }
 
-    /// AI redraw: swaps the whole board for one image element as a single
-    /// operation — one ⌘Z brings the replaced drawing back.
+    /// AI redraw and opening a picture: swaps the whole board for one element
+    /// as a single operation — one ⌘Z brings the replaced drawing back.
     func replaceAll(with element: BoardElement) {
         commitErase()
         history.append(.replaced(elements))
@@ -268,6 +271,19 @@ final class BoardModel {
         }
     }
 
+    /// Largest rect with `size`'s proportions centered inside `container`.
+    static func aspectFit(_ size: CGSize, in container: CGRect) -> CGRect {
+        let scale = min(container.width / size.width, container.height / size.height)
+        let width = size.width * scale
+        let height = size.height * scale
+        return CGRect(
+            x: container.midX - width / 2,
+            y: container.midY - height / 2,
+            width: width,
+            height: height
+        )
+    }
+
     private func clampedPan(_ proposed: CGPoint) -> CGPoint {
         CGPoint(
             x: min(Self.panLimit, max(-Self.panLimit, proposed.x)),
@@ -343,6 +359,9 @@ final class BoardModel {
         case let .image(rect, _):
             return sweep(from: start, to: end, radius: radius,
                          touchesSolid: rect.standardized)
+
+        case .backdrop:
+            return false
         }
     }
 

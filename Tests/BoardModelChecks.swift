@@ -64,6 +64,21 @@ struct BoardModelChecks {
         model.undo()
         check(model.elements.count == originalCount, "Replace and clear history compose correctly")
 
+        let marked = BoardModel()
+        let picture = CGRect(x: 0, y: 0, width: 200, height: 200)
+        marked.replaceAll(with: .backdrop(rect: picture, image: NSImage(size: picture.size)))
+        marked.append(line(50))
+        marked.erase(from: CGPoint(x: 0, y: 50), to: CGPoint(x: 200, y: 50), radius: 5)
+        marked.commitErase()
+        check(marked.elements.count == 1, "Eraser takes the ink and leaves the backdrop")
+        if case .backdrop = marked.elements[0] {} else { preconditionFailure("Backdrop must remain") }
+        check(marked.hitTest(CGPoint(x: 100, y: 100)) == nil, "Backdrop is not a pickable element")
+
+        let wide = BoardModel.aspectFit(CGSize(width: 400, height: 100), in: CGRect(x: 10, y: 20, width: 200, height: 200))
+        check(wide == CGRect(x: 10, y: 95, width: 200, height: 50), "Wide image fits the width and centers vertically")
+        let small = BoardModel.aspectFit(CGSize(width: 10, height: 20), in: CGRect(x: 0, y: 0, width: 200, height: 200))
+        check(small == CGRect(x: 50, y: 0, width: 100, height: 200), "Small image scales up to fill the pad")
+
         let viewport = CGRect(x: 0, y: 0, width: 900, height: 600)
         model.zoom(by: 4, in: viewport)
         model.pan(by: CGPoint(x: 100, y: -40))

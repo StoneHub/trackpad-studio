@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import UniformTypeIdentifiers
 
 final class BoardTabView: NSView, NSTextFieldDelegate {
     /// Draw mode: the finger's absolute pad position drives the app cursor.
@@ -117,6 +118,8 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
     private var textButton: NSButton!
     private var undoButton: NSButton!
     private var clearButton: NSButton!
+    private var saveButton: NSButton!
+    private var copyButton: NSButton!
     private let toolsLabel = NSTextField(labelWithString: "TOOLS")
     private let modeHint = NSTextField(labelWithString: "esc toggles")
     private let controlsHint = NSTextField(wrappingLabelWithString: "")
@@ -142,6 +145,8 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
     private let aiSpinner = NSProgressIndicator()
     private var aiRunning = false
     private var aiStatusText: String?
+    /// Where the open picture came from; suggests the save name and folder.
+    private var sourceImageURL: URL?
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { false }
@@ -162,6 +167,9 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
         allowedTouchTypes = [.indirect]
         wantsRestingTouches = true
         setUpSidebar()
+        registerForDraggedTypes(
+            NSImage.imageTypes.map { NSPasteboard.PasteboardType($0) } + [.fileURL]
+        )
 
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
@@ -289,6 +297,152 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
         drawSidebarCard()
         drawCursor()
         drawStatusStrip()
+    }
+
+    // MARK: - Opening pictures
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        NSImage.canInit(with: sender.draggingPasteboard) ? .copy : []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let pasteboard = sender.draggingPasteboard
+        guard let image = NSImage(pasteboard: pasteboard) else { return false }
+        return show(image, source: NSURL(from: pasteboard) as URL?)
+    }
+
+    func openImage(at url: URL) {
+        guard let image = NSImage(contentsOf: url), show(image, source: url) else {
+            flashAIStatus("Can't open \(url.lastPathComponent)")
+            return
+        }
+    }
+
+    /// Replaces the board with the picture, fitted to the pad brackets so a
+    /// finger can reach every part of it. One ⌘Z brings the old board back.
+    private func show(_ image: NSImage, source: URL?) -> Bool {
+        guard image.size.width > 0, image.size.height > 0 else { return false }
+        sourceImageURL = source?.isFileURL == true ? source : nil
+        finishActiveDraft()
+        commitTextEditing()
+
+        let fit = BoardModel.aspectFit(image.size, in: trackpadRect)
+        let origin = model.viewToCanvas(fit.origin, in: bounds)
+        let rect = CGRect(
+            origin: origin,
+            size: CGSize(width: fit.width / model.zoom, height: fit.height / model.zoom)
+        )
+        model.replaceAll(with: .backdrop(rect: rect, image: image))
+        suppressInkWhilePressed()
+        syncControls()
+        needsDisplay = true
+
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        return true
+    }
+
+    // MARK: - Save and copy
+
+    /// Flattens the board without any app chrome. An open picture comes out
+    /// at its own pixel size with ink clipped to it; otherwise the visible
+    /// board comes out at 2×.
+    private func renderBoard() -> NSBitmapImageRep? {
+        var viewRect = contentRect
+        var scale: CGFloat = 2
+        var backdropImage: NSImage?
+        if case let .backdrop(rect, image) = model.elements.first {
+            viewRect = model.canvasToView(rect, in: bounds)
+            backdropImage = image
+            // Longest sides, because EXIF rotation can swap width and height.
+            let longestPixels = image.representations.map { max($0.pixelsWide, $0.pixelsHigh) }.max() ?? 0
+            if longestPixels > 0 {
+                scale = CGFloat(longestPixels) / max(image.size.width, image.size.height)
+            }
+        }
+
+        let outputSize = backdropImage?.size ?? viewRect.size
+        let width = Int((outputSize.width * scale).rounded())
+        let height = Int((outputSize.height * scale).rounded())
+        guard width > 0, height > 0, viewRect.width > 0, viewRect.height > 0,
+              let sRGB = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: nil,
+                  width: width,
+                  height: height,
+                  bitsPerComponent: 8,
+                  bytesPerRow: 0,
+                  space: sRGB,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return nil }
+
+        context.scaleBy(x: CGFloat(width) / viewRect.width, y: CGFloat(height) / viewRect.height)
+        context.translateBy(x: -viewRect.minX, y: -viewRect.minY)
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        if backdropImage == nil {
+            NSColor(calibratedWhite: 0.075, alpha: 1).setFill()
+            NSBezierPath(rect: viewRect).fill()
+        }
+        model.elements.forEach { draw(element: $0) }
+        NSGraphicsContext.restoreGraphicsState()
+
+        return context.makeImage().map(NSBitmapImageRep.init(cgImage:))
+    }
+
+    private func performSave() {
+        finishActiveDraft()
+        commitTextEditing()
+        guard !model.elements.isEmpty, let window else {
+            flashAIStatus("Nothing to save")
+            return
+        }
+
+        var source: URL?
+        if case .backdrop = model.elements.first { source = sourceImageURL }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        panel.directoryURL = source?.deletingLastPathComponent()
+        panel.nameFieldStringValue = source.map {
+            $0.deletingPathExtension().lastPathComponent + " marked up.png"
+        } ?? "Trackpad Studio board.png"
+
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            do {
+                guard let png = self.renderBoard()?.representation(using: .png, properties: [:]) else {
+                    self.flashAIStatus("Couldn't render the board")
+                    return
+                }
+                try png.write(to: url)
+                self.flashAIStatus("Saved \(url.lastPathComponent)")
+            } catch {
+                self.flashAIStatus("Couldn't save \(url.lastPathComponent)")
+            }
+        }
+    }
+
+    private func performCopy() {
+        finishActiveDraft()
+        commitTextEditing()
+        guard !model.elements.isEmpty else {
+            flashAIStatus("Nothing to copy")
+            return
+        }
+        guard let rendered = renderBoard(),
+              let png = rendered.representation(using: .png, properties: [:]),
+              let tiff = rendered.tiffRepresentation
+        else {
+            flashAIStatus("Couldn't render the board")
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setData(png, forType: .png)
+        pasteboard.setData(tiff, forType: .tiff)
+        flashAIStatus("Copied image")
     }
 
     /// Seeds a small demo drawing (used by the --snapshot marketing/screenshot
@@ -534,6 +688,16 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
                 return
             }
 
+            if lowercased == "s" {
+                performSave()
+                return
+            }
+
+            if lowercased == "c" {
+                performCopy()
+                return
+            }
+
             if keyCode == 51 || keyCode == 117 ||
                 chars.unicodeScalars.contains(where: { $0.value == 0x7f }) {
                 performClear()
@@ -650,6 +814,16 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
 
     @objc private func clearButtonPressed(_ sender: NSButton) {
         performClear()
+        finishSidebarAction()
+    }
+
+    @objc private func saveButtonPressed(_ sender: NSButton) {
+        performSave()
+        finishSidebarAction()
+    }
+
+    @objc private func copyButtonPressed(_ sender: NSButton) {
+        performCopy()
         finishSidebarAction()
     }
 
@@ -1740,6 +1914,12 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
         clearButton = makeSidebarButton("Clear", symbol: "trash",
                                        action: #selector(clearButtonPressed(_:)), key: "⌘⌫")
         clearButton.toolTip = "Clear everything. Undo brings it back."
+        saveButton = makeSidebarButton("Save", symbol: "square.and.arrow.down",
+                                      action: #selector(saveButtonPressed(_:)), key: "⌘S")
+        saveButton.toolTip = "Save as PNG. An open picture keeps its full resolution."
+        copyButton = makeSidebarButton("Copy", symbol: "doc.on.doc",
+                                      action: #selector(copyButtonPressed(_:)), key: "⌘C")
+        copyButton.toolTip = "Copy the finished image to the clipboard."
         controlsHint.font = .systemFont(ofSize: 11)
         controlsHint.textColor = .secondaryLabelColor
         sidebar.addSubview(controlsHint)
@@ -1775,7 +1955,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
     }
 
     private func layoutSidebar() {
-        let height: CGFloat = min(476, max(1, bounds.height - statusHeight - edgeInset * 2))
+        let height: CGFloat = min(540, max(1, bounds.height - statusHeight - edgeInset * 2))
         sidebar.frame = CGRect(x: edgeInset, y: bounds.maxY - edgeInset - height,
                                width: sidebarWidth, height: height)
         var y = height - 42
@@ -1793,6 +1973,10 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
         undoButton.frame = CGRect(x: 10, y: y, width: sidebarWidth - 20, height: 28)
         y -= sidebarRowHeight
         clearButton.frame = CGRect(x: 10, y: y, width: sidebarWidth - 20, height: 28)
+        y -= sidebarRowHeight
+        saveButton.frame = CGRect(x: 10, y: y, width: sidebarWidth - 20, height: 28)
+        y -= sidebarRowHeight
+        copyButton.frame = CGRect(x: 10, y: y, width: sidebarWidth - 20, height: 28)
         y -= 80
         controlsHint.frame = CGRect(x: 14, y: max(8, y), width: sidebarWidth - 28, height: 68)
     }
@@ -1805,6 +1989,8 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
         }
         undoButton?.isEnabled = model.canUndo
         clearButton?.isEnabled = !model.elements.isEmpty
+        saveButton?.isEnabled = !model.elements.isEmpty
+        copyButton?.isEnabled = !model.elements.isEmpty
         controlsHint.stringValue = interactionMode == .pointer
             ? "Choose a tool or Draw to start drawing."
             : currentTool == .eraser
@@ -1909,7 +2095,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate {
                 ]
             )
 
-        case let .image(rect, image):
+        case let .image(rect, image), let .backdrop(rect, image):
             image.draw(
                 in: model.canvasToView(rect, in: bounds),
                 from: .zero,

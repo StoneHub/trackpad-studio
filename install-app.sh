@@ -10,6 +10,11 @@ pkill -x TrackpadStudio || true
 mkdir -p "$HOME/Applications"
 ditto TrackpadStudio.app "$DEST"
 
+# Open With must list the installed app, never this repo's build.
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+"$LSREGISTER" -f "$DEST"
+"$LSREGISTER" -u "$PWD/TrackpadStudio.app" || true
+
 # Replace any Dock tile that points at a repo build (TrackpadStudio*.app under
 # this checkout or an older path) with the installed app, keeping its slot.
 python3 - "$DEST" <<'PY'
