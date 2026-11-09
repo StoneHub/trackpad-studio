@@ -38,7 +38,8 @@ MultitouchSupport framework for per-finger contact size.
   on-screen size at any zoom, then hands the pen back.
 - **Mark up pictures** — drag an image or screenshot onto the board, or use
   Finder's Open With, and draw over it. The eraser only takes your ink; `⌘Z`
-  brings the previous board back.
+  brings the previous board back. `⌘S` saves a PNG and `⌘C` copies it, at the
+  picture's full resolution.
 - **Guided tutorial** (`⌘T` or the `?` button) — 8 trackpad capabilities as
   tutorial cards with live ✓ discovery, plus a weight-estimate card that turns
   the pad into a rough gram scale via capacitive contact size.
